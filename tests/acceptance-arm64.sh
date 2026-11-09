@@ -88,6 +88,115 @@ assert_no_active_slot_mounts() {
     fi
 }
 
+assert_delayed_loop_release_is_safe() {
+    local first_response="${TEMP_DIR}/delayed-loop-first.json"
+    local second_response="${TEMP_DIR}/delayed-loop-second.json"
+    local third_response="${TEMP_DIR}/delayed-loop-third.json"
+    local curl_pid
+    local holder_pid
+    local loop_device=''
+    local loop_identity=''
+    local current_identity=''
+    local second_started
+    local second_elapsed
+
+    curl --silent --show-error \
+        --header 'Content-Type: application/json' \
+        --data '{"language":"python","version":"3.12.0","run_timeout":3000,"files":[{"name":"main.py","content":"import time\ntime.sleep(1)\nprint(\"first\")"}]}' \
+        "${BASE_URL}/api/v2/execute" >"$first_response" &
+    curl_pid=$!
+
+    for _ in $(seq 1 100); do
+        loop_device="$(docker exec "$API_CONTAINER" sh -c \
+            "findmnt -rn -o SOURCE,TARGET | awk '\$2 ~ \"^/var/local/lib/isolate/[0-9]+/box\$\" { print \$1; exit }'" 2>/dev/null || true)"
+        if [[ -n "$loop_device" ]]; then
+            break
+        fi
+        sleep 0.02
+    done
+    if [[ ! "$loop_device" =~ ^/dev/loop[0-9]+$ ]]; then
+        wait "$curl_pid" || true
+        echo 'The delayed-loop fixture did not observe a sandbox loop device.' >&2
+        return 1
+    fi
+    loop_identity="$(docker exec "$API_CONTAINER" losetup \
+        --list \
+        --noheadings \
+        --raw \
+        --output BACK-INO,BACK-MAJ:MIN \
+        "$loop_device" | xargs)"
+    if [[ ! "$loop_identity" =~ ^[0-9]+\ [0-9]+:[0-9]+$ ]]; then
+        wait "$curl_pid" || true
+        echo "The delayed-loop fixture received invalid identity ${loop_identity}." >&2
+        return 1
+    fi
+
+    docker exec "$API_CONTAINER" sh -c \
+        "exec 3<'$loop_device'; touch /tmp/piston-loop-holder-ready; sleep 4" &
+    holder_pid=$!
+    for _ in $(seq 1 100); do
+        if docker exec "$API_CONTAINER" \
+            test -f /tmp/piston-loop-holder-ready >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.01
+    done
+    if ! docker exec "$API_CONTAINER" \
+        test -f /tmp/piston-loop-holder-ready >/dev/null 2>&1; then
+        wait "$curl_pid" || true
+        wait "$holder_pid" || true
+        echo 'The delayed-loop fixture could not hold the loop device open.' >&2
+        return 1
+    fi
+
+    wait "$curl_pid"
+    grep -q '"stdout":"first\\n"' "$first_response"
+
+    second_started="$(node -e 'console.log(Date.now())')"
+    curl --fail --silent --show-error \
+        --header 'Content-Type: application/json' \
+        --data '{"language":"python","version":"3.12.0","files":[{"name":"main.py","content":"print(\"second\")"}]}' \
+        "${BASE_URL}/api/v2/execute" >"$second_response"
+    second_elapsed="$(( $(node -e 'console.log(Date.now())') - second_started ))"
+    grep -q '"stdout":"second\\n"' "$second_response"
+    if [[ "$second_elapsed" -ge 1500 ]] || ! kill -0 "$holder_pid" 2>/dev/null; then
+        wait "$holder_pid" || true
+        echo 'A delayed loop release blocked an independent sandbox slot.' >&2
+        return 1
+    fi
+
+    wait "$holder_pid"
+    for _ in $(seq 1 100); do
+        current_identity="$(docker exec "$API_CONTAINER" losetup \
+            --list \
+            --noheadings \
+            --raw \
+            --output BACK-INO,BACK-MAJ:MIN \
+            "$loop_device" 2>/dev/null | xargs || true)"
+        if [[ "$current_identity" != "$loop_identity" ]]; then
+            break
+        fi
+        sleep 0.02
+    done
+    current_identity="$(docker exec "$API_CONTAINER" losetup \
+        --list \
+        --noheadings \
+        --raw \
+        --output BACK-INO,BACK-MAJ:MIN \
+        "$loop_device" 2>/dev/null | xargs || true)"
+    if [[ "$current_identity" == "$loop_identity" ]]; then
+        echo "Sandbox loop device ${loop_device} remained attached." >&2
+        return 1
+    fi
+
+    curl --fail --silent --show-error \
+        --header 'Content-Type: application/json' \
+        --data '{"language":"python","version":"3.12.0","files":[{"name":"main.py","content":"print(\"third\")"}]}' \
+        "${BASE_URL}/api/v2/execute" >"$third_response"
+    grep -q '"stdout":"third\\n"' "$third_response"
+    curl --fail --silent --show-error "${BASE_URL}/api/v2/runtimes" >/dev/null
+}
+
 assert_removed_slot_is_rebuilt() {
     local response_file="${TEMP_DIR}/rebuilt-slot-response.json"
     local curl_pid
@@ -276,6 +385,8 @@ curl --fail --silent --show-error \
     "${BASE_URL}/api/v2/packages" >/dev/null
 
 node "$ROOT/tests/acceptance-arm64.mjs" "$BASE_URL" full
+assert_no_active_slot_mounts
+assert_delayed_loop_release_is_safe
 assert_no_active_slot_mounts
 
 docker stop "$API_CONTAINER" >/dev/null
