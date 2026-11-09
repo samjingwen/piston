@@ -14,7 +14,7 @@ Run `./tests/acceptance-arm64.sh` from the repository root to build and validate
 
 The harness covers the REST and WebSocket contracts, pure cgroup v2 startup, package installation and deletion, scientific imports, execution limits, network and file isolation, and package persistence across restart and container replacement.
 It also enables bounded per-sandbox filesystems and proves aggregate storage exhaustion, inode exhaustion, three-slot independence, and clean subsequent jobs.
-The suite verifies that `/tmp` is an isolated memory-backed filesystem and that an injected slot-reset failure stops Piston instead of returning a dirty slot to the pool.
+The suite verifies that `/tmp` is an isolated memory-backed filesystem, that slot reset waits for delayed loop-device release, and that an injected slot-reset failure stops Piston instead of returning a dirty slot to the pool.
 
 Set `SKIP_IMAGE_BUILD=1` to reuse existing `piston-api:local-arm64` and `piston-repo:local-arm64` images.
 Set `PISTON_PACKAGE_REPO_DIR` to reuse an existing package repository directory containing an `index` file and package archive.

@@ -3,6 +3,7 @@ const child_process = require('child_process');
 const fs = require('fs/promises');
 const fss = require('fs');
 const path = require('path');
+const timers = require('timers/promises');
 const util = require('util');
 const Logger = require('logplease');
 const config = require('./config');
@@ -13,12 +14,16 @@ const STORAGE_ROOT = '/var/lib/piston-sandbox';
 const SCRATCH_IMAGE = path.join(STORAGE_ROOT, 'scratch.ext4');
 const SCRATCH_MOUNT = path.join(STORAGE_ROOT, 'pool');
 const ISOLATE_ROOT = '/var/local/lib/isolate';
+const FINDMNT_PATH = '/usr/bin/findmnt';
+const LOSETUP_PATH = '/usr/sbin/losetup';
 const MKFS_PATH = '/usr/sbin/mkfs.ext4';
 const MOUNT_PATH = '/usr/bin/mount';
 const UMOUNT_PATH = '/usr/bin/umount';
+const LOOP_DETACH_TIMEOUT_MS = 10000;
+const LOOP_DETACH_POLL_MS = 25;
 const slots = new Map();
+const operation_queues = new Map();
 let worker = null;
-let operation_queue = Promise.resolve();
 let shutting_down = false;
 let shutdown_exit_code = null;
 
@@ -68,6 +73,82 @@ async function format_slot(slot) {
     ]);
 }
 
+async function inspect_loop_device(loop_device) {
+    let result;
+    try {
+        result = await exec_file(
+            LOSETUP_PATH,
+            [
+                '--list',
+                '--noheadings',
+                '--raw',
+                '--output',
+                'NAME,BACK-INO,BACK-MAJ:MIN',
+                loop_device,
+            ],
+            { maxBuffer: 1024 * 1024 }
+        );
+    } catch (error) {
+        if (
+            error.code === 1 &&
+            String(error.stdout ?? '').trim() === '' &&
+            String(error.stderr ?? '').trim() === ''
+        ) {
+            return null;
+        }
+        const details = [error.message, error.stdout, error.stderr]
+            .filter(Boolean)
+            .join('\n');
+        throw new Error(`${LOSETUP_PATH} failed:\n${details}`);
+    }
+
+    const output = result.stdout.trim();
+    if (output === loop_device) return null;
+
+    const fields = output.split(/\s+/);
+    if (
+        fields.length !== 3 ||
+        fields[0] !== loop_device ||
+        !/^\d+$/.test(fields[1]) ||
+        !/^\d+:\d+$/.test(fields[2])
+    ) {
+        throw new Error(
+            `Received invalid loop device identity for ${loop_device}: ${output}`
+        );
+    }
+    return `${fields[1]}:${fields[2]}`;
+}
+
+async function get_mounted_loop_device(box_path) {
+    const { stdout } = await run(FINDMNT_PATH, [
+        '--noheadings',
+        '--raw',
+        '--output',
+        'SOURCE',
+        '--target',
+        box_path,
+    ]);
+    const loop_device = stdout.trim();
+    if (!/^\/dev\/loop\d+$/.test(loop_device)) {
+        throw new Error(
+            `Sandbox mount at ${box_path} has invalid loop device ${loop_device}`
+        );
+    }
+    return loop_device;
+}
+
+async function wait_for_loop_detach(loop_device, loop_identity) {
+    const deadline = Date.now() + LOOP_DETACH_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        const current_identity = await inspect_loop_device(loop_device);
+        if (current_identity !== loop_identity) return;
+        await timers.setTimeout(LOOP_DETACH_POLL_MS);
+    }
+    throw new Error(
+        `Loop device ${loop_device} did not detach within ${LOOP_DETACH_TIMEOUT_MS}ms`
+    );
+}
+
 async function initialize_storage() {
     if (!config.sandbox_storage_enabled) return;
 
@@ -84,6 +165,8 @@ async function initialize_storage() {
             image_path: path.join(SCRATCH_MOUNT, `slot-${slot_id}.ext4`),
             state: 'initializing',
             box_id: null,
+            loop_device: null,
+            loop_identity: null,
         };
         slots.set(slot_id, slot);
         await create_sparse_file(slot.image_path, config.sandbox_slot_size_mb);
@@ -92,7 +175,7 @@ async function initialize_storage() {
     }
 
     logger.info(
-        `Initialized ${config.max_concurrent_jobs} bounded sandbox slots`,
+        `Initialized ${config.max_concurrent_jobs} bounded sandbox slots`
     );
 }
 
@@ -118,7 +201,7 @@ async function attach_slot(slot_id, box_id) {
     const slot = get_slot(slot_id);
     if (!['ready', 'dirty'].includes(slot.state)) {
         throw new Error(
-            `Sandbox slot ${slot_id} cannot attach from state ${slot.state}`,
+            `Sandbox slot ${slot_id} cannot attach from state ${slot.state}`
         );
     }
 
@@ -132,30 +215,46 @@ async function attach_slot(slot_id, box_id) {
     }
 
     await run(MOUNT_PATH, ['--options', 'loop', slot.image_path, box_path]);
+    const loop_device = await get_mounted_loop_device(box_path);
+    const loop_identity = await inspect_loop_device(loop_device);
+    if (loop_identity === null) {
+        throw new Error(`Sandbox loop device ${loop_device} is not attached`);
+    }
     await fs.chown(box_path, box_lstat.uid, box_lstat.gid);
     await fs.chmod(box_path, box_lstat.mode & 0o777);
     slot.state = 'attached';
     slot.box_id = box_id;
+    slot.loop_device = loop_device;
+    slot.loop_identity = loop_identity;
 }
 
 async function detach_slot(slot_id, box_id) {
     const slot = get_slot(slot_id);
     if (slot.state !== 'attached' || slot.box_id !== box_id) {
         throw new Error(
-            `Sandbox slot ${slot_id} is not attached to box ${box_id}`,
+            `Sandbox slot ${slot_id} is not attached to box ${box_id}`
         );
     }
 
+    const loop_device = slot.loop_device;
+    const loop_identity = slot.loop_identity;
+    if (loop_device === null || loop_identity === null) {
+        throw new Error(`Sandbox slot ${slot_id} has no attached loop device`);
+    }
+
     await run(UMOUNT_PATH, [get_box_path(box_id)]);
+    await wait_for_loop_detach(loop_device, loop_identity);
     slot.state = 'dirty';
     slot.box_id = null;
+    slot.loop_device = null;
+    slot.loop_identity = null;
 }
 
 async function reset_slot(slot_id) {
     const slot = get_slot(slot_id);
     if (!['ready', 'dirty'].includes(slot.state)) {
         throw new Error(
-            `Sandbox slot ${slot_id} cannot reset from state ${slot.state}`,
+            `Sandbox slot ${slot_id} cannot reset from state ${slot.state}`
         );
     }
 
@@ -163,6 +262,8 @@ async function reset_slot(slot_id) {
     await format_slot(slot);
     slot.state = 'ready';
     slot.box_id = null;
+    slot.loop_device = null;
+    slot.loop_identity = null;
 }
 
 async function perform_operation(message) {
@@ -176,7 +277,9 @@ async function perform_operation(message) {
         case 'quarantine':
             get_slot(message.slot_id);
             logger.error(
-                `Sandbox slot ${message.slot_id} was quarantined: ${String(message.reason).slice(0, 1000)}`,
+                `Sandbox slot ${message.slot_id} was quarantined: ${String(
+                    message.reason
+                ).slice(0, 1000)}`
             );
             request_shutdown(1);
             return;
@@ -197,7 +300,9 @@ function request_shutdown(exit_code = 0) {
 function handle_message(message) {
     if (message?.type !== 'sandbox-storage-request') return;
 
-    operation_queue = operation_queue.then(async () => {
+    const previous_operation =
+        operation_queues.get(message.slot_id) ?? Promise.resolve();
+    const operation = previous_operation.then(async () => {
         try {
             await perform_operation(message);
             worker.send({
@@ -216,6 +321,12 @@ function handle_message(message) {
                 });
             }
             request_shutdown(1);
+        }
+    });
+    operation_queues.set(message.slot_id, operation);
+    operation.finally(() => {
+        if (operation_queues.get(message.slot_id) === operation) {
+            operation_queues.delete(message.slot_id);
         }
     });
 }
