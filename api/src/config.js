@@ -20,33 +20,31 @@ const options = {
     data_directory: {
         desc: 'Absolute path to store all piston related data at',
         default: '/piston',
-        validators: [
-            x => fss.exists_sync(x) || `Directory ${x} does not exist`,
-        ],
+        validators: [x => fss.existsSync(x) || `Directory ${x} does not exist`],
     },
     runner_uid_min: {
         desc: 'Minimum uid to use for runner',
         default: 1001,
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     runner_uid_max: {
         desc: 'Maximum uid to use for runner',
         default: 1500,
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     runner_gid_min: {
         desc: 'Minimum gid to use for runner',
         default: 1001,
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     runner_gid_max: {
         desc: 'Maximum gid to use for runner',
         default: 1500,
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     disable_networking: {
         desc: 'Set to true to disable networking',
@@ -57,62 +55,62 @@ const options = {
     output_max_size: {
         desc: 'Max size of each stdio buffer',
         default: 1024,
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     max_process_count: {
         desc: 'Max number of processes per job',
         default: 64,
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     max_open_files: {
         desc: 'Max number of open files per job',
         default: 2048,
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     max_file_size: {
         desc: 'Max file size in bytes for a file',
         default: 10000000, //10MB
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     compile_timeout: {
         desc: 'Max time allowed for compile stage in milliseconds',
         default: 10000, // 10 seconds
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     run_timeout: {
         desc: 'Max time allowed for run stage in milliseconds',
         default: 3000, // 3 seconds
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     compile_cpu_time: {
         desc: 'Max CPU time allowed for compile stage in milliseconds',
         default: 10000, // 10 seconds
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     run_cpu_time: {
         desc: 'Max CPU time allowed for run stage in milliseconds',
         default: 3000, // 3 seconds
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     compile_memory_limit: {
         desc: 'Max memory usage for compile stage in bytes (set to -1 for no limit)',
         default: -1, // no limit
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     run_memory_limit: {
         desc: 'Max memory usage for run stage in bytes (set to -1 for no limit)',
         default: -1, // no limit
-        parser: parse_int,
-        validators: [(x, raw) => !is_nan(x) || `${raw} is not a number`],
+        parser: value => Number.parseInt(value, 10),
+        validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
     },
     repo_url: {
         desc: 'URL of repo index',
@@ -123,7 +121,7 @@ const options = {
     max_concurrent_jobs: {
         desc: 'Maximum number of concurrent jobs to run at one time',
         default: 64,
-        parser: parse_int,
+        parser: value => Number.parseInt(value, 10),
         validators: [x => x > 0 || `${x} cannot be negative`],
     },
     limit_overrides: {
@@ -218,7 +216,7 @@ logger.info(`Loading Configuration from environment`);
 let config = {};
 
 for (const option_name in options) {
-    const env_key = 'PISTON_' + option_name.to_upper_case();
+    const env_key = 'PISTON_' + option_name.toUpperCase();
     const option = options[option_name];
     const parser = option.parser || (x => x);
     const env_val = process.env[env_key];

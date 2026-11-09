@@ -1,36 +1,98 @@
-FROM buildpack-deps:buster AS isolate
+# syntax=docker/dockerfile:1
+
+ARG NODE_IMAGE=node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072
+
+FROM ${NODE_IMAGE} AS isolate
+
+ARG ISOLATE_COMMIT=af6db68042c3aa0ded80787fbb78bc0846ea2114
+ARG ISOLATE_SHA256=2b9f4da856f9bd3adba18b58126fa9471a8b51cdbdaa221efe4ad36f6bb6b980
+
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git libcap-dev && \
-    rm -rf /var/lib/apt/lists/* && \
-    git clone https://github.com/envicutor/isolate.git /tmp/isolate/ && \
-    cd /tmp/isolate && \
-    git checkout af6db68042c3aa0ded80787fbb78bc0846ea2114 && \
-    make -j$(nproc) install && \
-    rm -rf /tmp/*
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        libcap-dev && \
+    rm -rf /var/lib/apt/lists/*
 
-FROM node:15.10.0-buster-slim
+RUN curl --fail --location --silent --show-error \
+        "https://github.com/envicutor/isolate/archive/${ISOLATE_COMMIT}.tar.gz" \
+        --output /tmp/isolate.tar.gz && \
+    echo "${ISOLATE_SHA256}  /tmp/isolate.tar.gz" | sha256sum --check --strict && \
+    mkdir /tmp/isolate && \
+    tar xzf /tmp/isolate.tar.gz --directory /tmp/isolate --strip-components=1 && \
+    make -C /tmp/isolate -j"$(nproc)" BUILD_COMMIT="${ISOLATE_COMMIT}" install
 
-ENV DEBIAN_FRONTEND=noninteractive
+FROM ${NODE_IMAGE} AS runtime
+
+ARG ISOLATE_COMMIT=af6db68042c3aa0ded80787fbb78bc0846ea2114
+ARG VCS_REF=uncommitted
+
+LABEL org.opencontainers.image.source="https://github.com/engineer-man/piston" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.description="Piston API with Isolate" \
+      org.piston.isolate.revision="${ISOLATE_COMMIT}"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NODE_ENV=production
 
 RUN dpkg-reconfigure -p critical dash
 RUN apt-get update && \
-    apt-get install -y libxml2 gnupg tar coreutils util-linux libc6-dev \
-    binutils build-essential locales libpcre3-dev libevent-dev libgmp3-dev \
-    libncurses6 libncurses5 libedit-dev libseccomp-dev rename procps python3 \
-    libreadline-dev libblas-dev liblapack-dev libpcre3-dev libarpack2-dev \
-    libfftw3-dev libglpk-dev libqhull-dev libqrupdate-dev libsuitesparse-dev \
-    libsundials-dev libpcre2-dev libcap-dev && \
-    rm -rf /var/lib/apt/lists/*
-RUN useradd -M piston
-COPY --from=isolate /usr/local/bin/isolate /usr/local/bin
+    apt-get install -y --no-install-recommends \
+        binutils \
+        build-essential \
+        coreutils \
+        gnupg \
+        libc6-dev \
+        libarpack2-dev \
+        libblas-dev \
+        libcap-dev \
+        libedit-dev \
+        libevent-dev \
+        libfftw3-dev \
+        libglpk-dev \
+        libgmp-dev \
+        liblapack-dev \
+        libncurses6 \
+        libpcre2-dev \
+        libqhull-dev \
+        libqrupdate-dev \
+        libreadline-dev \
+        libseccomp-dev \
+        libsuitesparse-dev \
+        libsundials-dev \
+        libxml2 \
+        locales \
+        procps \
+        python3 \
+        rename \
+        tar \
+        util-linux && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --no-create-home piston
+
+COPY --from=isolate /usr/local/bin/isolate /usr/local/bin/isolate
 COPY --from=isolate /usr/local/etc/isolate /usr/local/etc/isolate
 
-RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
+RUN test -u /usr/local/bin/isolate && \
+    sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && \
+    locale-gen
 
 WORKDIR /piston_api
-COPY ["package.json", "package-lock.json", "./"]
-RUN npm install
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && \
+    npm audit --omit=dev --audit-level=low && \
+    rm -rf \
+        /root/.npm \
+        /usr/local/bin/npm \
+        /usr/local/bin/npx \
+        /usr/local/lib/node_modules/npm
+
 COPY ./src ./src
 
-CMD ["/piston_api/src/docker-entrypoint.sh"]
 EXPOSE 2000/tcp
+
+# Startup requires root to initialize cgroup v2 and package ownership.
+# docker-entrypoint.sh runs the Node API as the unprivileged piston user.
+CMD ["/piston_api/src/docker-entrypoint.sh"]

@@ -113,7 +113,7 @@ class Runtime {
 
     static load_package(package_dir) {
         let info = JSON.parse(
-            fss.read_file_sync(path.join(package_dir, 'pkg-info.json'))
+            fss.readFileSync(path.join(package_dir, 'pkg-info.json'))
         );
 
         let {
@@ -167,7 +167,7 @@ class Runtime {
 
     get compiled() {
         if (this._compiled === undefined) {
-            this._compiled = fss.exists_sync(path.join(this.pkgdir, 'compile'));
+            this._compiled = fss.existsSync(path.join(this.pkgdir, 'compile'));
         }
 
         return this._compiled;
@@ -176,7 +176,7 @@ class Runtime {
     get env_vars() {
         if (!this._env_vars) {
             const env_file = path.join(this.pkgdir, '.env');
-            const env_content = fss.read_file_sync(env_file).toString();
+            const env_content = fss.readFileSync(env_file).toString();
 
             this._env_vars = env_content.trim().split('\n');
         }

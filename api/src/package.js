@@ -21,7 +21,7 @@ class Package {
     }
 
     get installed() {
-        return fss.exists_sync(
+        return fss.existsSync(
             path.join(this.install_path, globals.pkg_installed_file)
         );
     }
@@ -42,7 +42,7 @@ class Package {
 
         logger.info(`Installing ${this.language}-${this.version.raw}`);
 
-        if (fss.exists_sync(this.install_path)) {
+        if (fss.existsSync(this.install_path)) {
             logger.warn(
                 `${this.language}-${this.version.raw} has residual files. Removing them.`
             );
@@ -58,7 +58,7 @@ class Package {
         const pkgpath = path.join(this.install_path, 'pkg.tar.gz');
         const download = await fetch(this.download);
 
-        const file_stream = fss.create_write_stream(pkgpath);
+        const file_stream = fss.createWriteStream(pkgpath);
         await new Promise((resolve, reject) => {
             download.body.pipe(file_stream);
             download.body.on('error', reject);
@@ -68,9 +68,9 @@ class Package {
 
         logger.debug('Validating checksums');
         logger.debug(`Assert sha256(pkg.tar.gz) == ${this.checksum}`);
-        const hash = crypto.create_hash('sha256');
+        const hash = crypto.createHash('sha256');
 
-        const read_stream = fss.create_read_stream(pkgpath);
+        const read_stream = fss.createReadStream(pkgpath);
         await new Promise((resolve, reject) => {
             read_stream.on('data', chunk => hash.update(chunk));
             read_stream.on('end', () => resolve());
@@ -142,7 +142,7 @@ class Package {
             )
             .join('\n');
 
-        await fs.write_file(path.join(this.install_path, '.env'), filtered_env);
+        await fs.writeFile(path.join(this.install_path, '.env'), filtered_env);
 
         logger.debug('Changing Ownership of package directory');
         await util.promisify(chownr)(
@@ -152,7 +152,7 @@ class Package {
         );
 
         logger.debug('Writing installed state to disk');
-        await fs.write_file(
+        await fs.writeFile(
             path.join(this.install_path, globals.pkg_installed_file),
             Date.now().toString()
         );
@@ -187,7 +187,7 @@ class Package {
         found_runtime.unregister();
 
         logger.debug('Cleaning files from disk');
-        await fs.rmdir(this.install_path, { recursive: true });
+        await fs.rm(this.install_path, { recursive: true, force: true });
 
         logger.info(`Uninstalled ${this.language}-${this.version.raw}`);
 

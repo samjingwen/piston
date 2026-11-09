@@ -2,7 +2,7 @@
 const is_docker = require('is-docker');
 const fs = require('fs');
 const platform = `${is_docker() ? 'docker' : 'baremetal'}-${fs
-    .read_file_sync('/etc/os-release')
+    .readFileSync('/etc/os-release')
     .toString()
     .split('\n')
     .find(x => x.startsWith('ID'))

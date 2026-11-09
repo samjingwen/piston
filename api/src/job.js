@@ -1,5 +1,5 @@
 const logplease = require('logplease');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const cp = require('child_process');
 const path = require('path');
 const config = require('./config');
@@ -32,7 +32,7 @@ class Job {
         cpu_times,
         memory_limits,
     }) {
-        this.uuid = uuidv4();
+        this.uuid = randomUUID();
 
         this.logger = logplease.create(`job/${this.uuid}`);
 
@@ -117,7 +117,7 @@ class Job {
                 recursive: true,
                 mode: 0o700,
             });
-            await fs.write_file(file_path, file_content);
+            await fs.writeFile(file_path, file_content);
         }
 
         this.state = job_states.PRIMED;
@@ -158,7 +158,7 @@ class Job {
                 '/box/submission',
                 '-E',
                 'HOME=/tmp',
-                ...this.runtime.env_vars.flat_map(v => ['-E', v]),
+                ...this.runtime.env_vars.flatMap(v => ['-E', v]),
                 '-E',
                 `PISTON_LANGUAGE=${this.runtime.language}`,
                 `--dir=${this.runtime.pkgdir}`,
@@ -263,7 +263,7 @@ class Job {
 
         try {
             const metadata_str = (
-                await fs.read_file(box.metadata_file_path)
+                await fs.readFile(box.metadata_file_path)
             ).toString();
             const metadata_lines = metadata_str.split('\n');
             for (const line of metadata_lines) {
@@ -277,13 +277,14 @@ class Job {
                 }
                 switch (key) {
                     case 'cg-mem':
-                        memory = parse_int(value) * 1000;
+                        memory = Number.parseInt(value, 10) * 1000;
                         break;
                     case 'exitcode':
-                        code = parse_int(value);
+                        code = Number.parseInt(value, 10);
                         break;
                     case 'exitsig':
-                        signal = globals.SIGNALS[parse_int(value)] ?? null;
+                        signal =
+                            globals.SIGNALS[Number.parseInt(value, 10)] ?? null;
                         break;
                     case 'message':
                         message = message || value;
@@ -292,10 +293,10 @@ class Job {
                         status = status || value;
                         break;
                     case 'time':
-                        cpu_time_stat = parse_float(value) * 1000;
+                        cpu_time_stat = Number.parseFloat(value) * 1000;
                         break;
                     case 'time-wall':
-                        wall_time_stat = parse_float(value) * 1000;
+                        wall_time_stat = Number.parseFloat(value) * 1000;
                         break;
                     default:
                         break;

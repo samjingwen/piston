@@ -33,11 +33,11 @@ exports.handler = async ({ axios, specfile }) => {
             negate: false,
         };
 
-        if (line.starts_with('#')) {
+        if (line.startsWith('#')) {
             rule.comment = true;
         } else {
             let l = line.trim();
-            if (line.starts_with('!')) {
+            if (line.startsWith('!')) {
                 rule.negate = true;
                 l = line.slice(1).trim();
             }

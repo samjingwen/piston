@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-require('nocamel');
 const Logger = require('logplease');
 const express = require('express');
 const expressWs = require('express-ws');
@@ -20,16 +19,16 @@ expressWs(app);
     Logger.setLogLevel(config.log_level);
     logger.debug('Ensuring data directories exist');
 
-    Object.values(globals.data_directories).for_each(dir => {
+    Object.values(globals.data_directories).forEach(dir => {
         let data_path = path.join(config.data_directory, dir);
 
         logger.debug(`Ensuring ${data_path} exists`);
 
-        if (!fss.exists_sync(data_path)) {
+        if (!fss.existsSync(data_path)) {
             logger.info(`${data_path} does not exist.. Creating..`);
 
             try {
-                fss.mkdir_sync(data_path);
+                fss.mkdirSync(data_path);
             } catch (e) {
                 logger.error(`Failed to create ${data_path}: `, e.message);
             }
@@ -55,10 +54,10 @@ expressWs(app);
     const installed_languages = languages
         .flat()
         .filter(pkg =>
-            fss.exists_sync(path.join(pkg, globals.pkg_installed_file))
+            fss.existsSync(path.join(pkg, globals.pkg_installed_file))
         );
 
-    installed_languages.for_each(pkg => runtime.load_package(pkg));
+    installed_languages.forEach(pkg => runtime.load_package(pkg));
 
     logger.info('Starting API Server');
     logger.debug('Constructing Express App');
@@ -97,6 +96,6 @@ expressWs(app);
 
     process.on('SIGTERM', () => {
         server.close();
-        process.exit(0)
+        process.exit(0);
     });
 })();
