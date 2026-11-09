@@ -258,6 +258,7 @@ assert_removed_slot_is_rebuilt() {
 }
 
 assert_failed_reset_stops_api() {
+    local api_log="${TEMP_DIR}/failed-reset-api.log"
     local response_file="${TEMP_DIR}/failed-reset-response.json"
     local curl_pid
     local slot_image=''
@@ -296,7 +297,8 @@ assert_failed_reset_stops_api() {
         echo 'Piston exited successfully after a sandbox reset failure.' >&2
         return 1
     fi
-    docker logs "$API_CONTAINER" 2>&1 | grep -q "Sandbox slot ${slot_id} is quarantined"
+    docker logs "$API_CONTAINER" >"$api_log" 2>&1
+    grep -q "Sandbox slot ${slot_id} is quarantined" "$api_log"
 }
 
 assert_invalid_storage_config() {
