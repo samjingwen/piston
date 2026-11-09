@@ -18,4 +18,7 @@ The suite verifies that `/tmp` is an isolated memory-backed filesystem, that slo
 
 Set `SKIP_IMAGE_BUILD=1` to reuse existing `piston-api:local-arm64` and `piston-repo:local-arm64` images.
 Set `PISTON_PACKAGE_REPO_DIR` to reuse an existing package repository directory containing an `index` file and package archive.
+
+Run `tests/reproducible-package.sh` on a native ARM64 Docker host to build the Python package twice from tracked clean inputs and require byte-identical package archives and repository indexes.
+Set `PISTON_REPRODUCIBILITY_OUTPUT_DIR` to retain one verified repository for reuse through `PISTON_PACKAGE_REPO_DIR` during full acceptance.
 Set `KEEP_ACCEPTANCE_RESOURCES=1` to keep the uniquely named test containers, network, and temporary directory for inspection.

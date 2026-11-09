@@ -5,8 +5,21 @@ set -euo pipefail
 readonly PYTHON_VERSION=3.12.0
 readonly PYTHON_SHA256=51412956d24a1ef7c97f1cb5f70e185c13e3de1f50d131c0aac6338080687afb
 readonly PREFIX="$(realpath "$(dirname "$0")")"
+readonly REPRODUCIBLE_TIMESTAMP=1696204800
+readonly REQUIREMENTS_LOCK="${PREFIX}/requirements.lock"
 
-mkdir -p "$PREFIX/build"
+export PYTHONHASHSEED=0
+export SOURCE_DATE_EPOCH="$REPRODUCIBLE_TIMESTAMP"
+umask 022
+
+rm -rf \
+    "$PREFIX/bin" \
+    "$PREFIX/build" \
+    "$PREFIX/include" \
+    "$PREFIX/lib" \
+    "$PREFIX/lib64" \
+    "$PREFIX/share"
+mkdir "$PREFIX/build"
 cd "$PREFIX/build"
 
 curl --fail --location --silent --show-error \
@@ -23,22 +36,11 @@ make install -j"$(nproc)"
 cd "$PREFIX"
 rm -rf build
 
-bin/pip3 install --no-cache-dir --only-binary=:all: \
-    base58==2.1.1 \
-    bcrypt==5.0.0 \
-    cffi==2.1.1 \
-    cryptography==50.0.2 \
-    mpmath==1.3.0 \
-    networkx==3.7 \
-    numpy==2.5.4 \
-    pandas==3.1.1 \
-    passlib==1.7.4 \
-    pycparser==3.12 \
-    pycryptodome==4.4.0 \
-    PyNaCl==1.6.2 \
-    python-dateutil==4.0.0 \
-    scipy==1.18.1 \
-    sympy==1.14.0 \
-    tzdata==2026.6 \
-    whoosh==2.7.4 \
-    xxhash==4.0.2
+bin/pip3 install \
+    --disable-pip-version-check \
+    --no-cache-dir \
+    --only-binary=:all: \
+    --require-hashes \
+    --requirement "$REQUIREMENTS_LOCK"
+
+bin/python3.12 -m pip check

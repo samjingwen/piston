@@ -88,6 +88,31 @@ assert_no_active_slot_mounts() {
     fi
 }
 
+wait_for_active_slot_image() {
+    local loop_device=''
+    local slot_image=''
+
+    for _ in $(seq 1 100); do
+        loop_device="$(docker exec "$API_CONTAINER" sh -c \
+            "findmnt -rn -o SOURCE,TARGET | awk '\$2 ~ \"^/var/local/lib/isolate/[0-9]+/box\$\" { print \$1; exit }'" 2>/dev/null || true)"
+        if [[ "$loop_device" =~ ^/dev/loop[0-9]+$ ]]; then
+            slot_image="$(docker exec "$API_CONTAINER" losetup \
+                --list \
+                --noheadings \
+                --raw \
+                --output BACK-FILE \
+                "$loop_device" 2>/dev/null | xargs || true)"
+            if [[ "$slot_image" =~ ^/var/lib/piston-sandbox/pool/slot-[0-9]+\.ext4$ ]]; then
+                printf '%s\n' "$slot_image"
+                return 0
+            fi
+        fi
+        sleep 0.02
+    done
+
+    return 1
+}
+
 assert_delayed_loop_release_is_safe() {
     local first_response="${TEMP_DIR}/delayed-loop-first.json"
     local second_response="${TEMP_DIR}/delayed-loop-second.json"
@@ -200,7 +225,8 @@ assert_delayed_loop_release_is_safe() {
 assert_removed_slot_is_rebuilt() {
     local response_file="${TEMP_DIR}/rebuilt-slot-response.json"
     local curl_pid
-    local mounted=0
+    local slot_image=''
+    local rebuilt=0
 
     curl --silent --show-error \
         --header 'Content-Type: application/json' \
@@ -208,32 +234,34 @@ assert_removed_slot_is_rebuilt() {
         "${BASE_URL}/api/v2/execute" >"$response_file" &
     curl_pid=$!
 
-    for _ in $(seq 1 100); do
-        if docker exec "$API_CONTAINER" sh -c \
-            "findmnt -rn -o TARGET | grep -q '^/var/local/lib/isolate/.*/box$'"; then
-            mounted=1
-            break
-        fi
-        sleep 0.02
-    done
-    if [[ "$mounted" != '1' ]]; then
+    if ! slot_image="$(wait_for_active_slot_image)"; then
         wait "$curl_pid" || true
-        echo 'The slot-rebuild fixture did not observe slot 1 mounted.' >&2
+        echo 'The slot-rebuild fixture did not observe an active slot image.' >&2
         return 1
     fi
 
     docker exec "$API_CONTAINER" \
-        rm /var/lib/piston-sandbox/pool/slot-1.ext4
+        rm "$slot_image"
     wait "$curl_pid"
-    docker exec "$API_CONTAINER" \
-        test -f /var/lib/piston-sandbox/pool/slot-1.ext4
+    for _ in $(seq 1 100); do
+        if docker exec "$API_CONTAINER" test -f "$slot_image"; then
+            rebuilt=1
+            break
+        fi
+        sleep 0.05
+    done
+    if [[ "$rebuilt" != '1' ]]; then
+        echo "Piston did not rebuild ${slot_image} after job cleanup." >&2
+        return 1
+    fi
     curl --fail --silent --show-error "${BASE_URL}/api/v2/runtimes" >/dev/null
 }
 
 assert_failed_reset_stops_api() {
     local response_file="${TEMP_DIR}/failed-reset-response.json"
     local curl_pid
-    local mounted=0
+    local slot_image=''
+    local slot_id=''
     local stopped=0
 
     curl --silent --show-error \
@@ -242,22 +270,15 @@ assert_failed_reset_stops_api() {
         "${BASE_URL}/api/v2/execute" >"$response_file" &
     curl_pid=$!
 
-    for _ in $(seq 1 100); do
-        if docker exec "$API_CONTAINER" sh -c \
-            "findmnt -rn -o TARGET | grep -q '^/var/local/lib/isolate/.*/box$'"; then
-            mounted=1
-            break
-        fi
-        sleep 0.02
-    done
-    if [[ "$mounted" != '1' ]]; then
+    if ! slot_image="$(wait_for_active_slot_image)"; then
         wait "$curl_pid" || true
-        echo 'The reset-failure fixture did not observe slot 1 mounted.' >&2
+        echo 'The reset-failure fixture did not observe an active slot image.' >&2
         return 1
     fi
+    slot_id="${slot_image##*slot-}"
+    slot_id="${slot_id%.ext4}"
 
-    docker exec "$API_CONTAINER" sh -c \
-        'rm /var/lib/piston-sandbox/pool/slot-1.ext4 && mkdir /var/lib/piston-sandbox/pool/slot-1.ext4'
+    docker exec "$API_CONTAINER" sh -c 'rm "$1" && mkdir "$1"' _ "$slot_image"
     wait "$curl_pid" || true
 
     for _ in $(seq 1 100); do
@@ -275,7 +296,7 @@ assert_failed_reset_stops_api() {
         echo 'Piston exited successfully after a sandbox reset failure.' >&2
         return 1
     fi
-    docker logs "$API_CONTAINER" 2>&1 | grep -q 'Sandbox slot 1 is quarantined'
+    docker logs "$API_CONTAINER" 2>&1 | grep -q "Sandbox slot ${slot_id} is quarantined"
 }
 
 assert_invalid_storage_config() {
