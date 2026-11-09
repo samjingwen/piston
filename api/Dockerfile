@@ -42,6 +42,7 @@ RUN apt-get update && \
         binutils \
         build-essential \
         coreutils \
+        e2fsprogs \
         gnupg \
         libc6-dev \
         libarpack2-dev \
@@ -93,6 +94,6 @@ COPY ./src ./src
 
 EXPOSE 2000/tcp
 
-# Startup requires root to initialize cgroup v2 and package ownership.
-# docker-entrypoint.sh runs the Node API as the unprivileged piston user.
+# Startup requires root to initialize cgroup v2, package ownership, and bounded storage.
+# The root supervisor runs the Node API worker as the unprivileged piston user.
 CMD ["/piston_api/src/docker-entrypoint.sh"]

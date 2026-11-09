@@ -5,6 +5,9 @@ const path = require('path');
 const config = require('./config');
 const fs = require('fs/promises');
 const globals = require('./globals');
+const sandbox_pool = require('./sandbox-pool');
+const sandbox_storage = require('./sandbox-storage');
+const util = require('util');
 
 const job_states = {
     READY: Symbol('Ready to be primed'),
@@ -16,13 +19,14 @@ const MAX_BOX_ID = 999;
 const ISOLATE_PATH = '/usr/local/bin/isolate';
 let box_id = 0;
 
-let remaining_job_spaces = config.max_concurrent_jobs;
-let job_queue = [];
+const exec_file = util.promisify(cp.execFile);
 
 const get_next_box_id = () => ++box_id % MAX_BOX_ID;
 
 class Job {
     #dirty_boxes;
+    #slot_id;
+    #cleanup_started;
     constructor({
         runtime,
         files,
@@ -58,44 +62,53 @@ class Job {
 
         this.state = job_states.READY;
         this.#dirty_boxes = [];
+        this.#slot_id = null;
+        this.#cleanup_started = false;
     }
 
     async #create_isolate_box() {
         const box_id = get_next_box_id();
         const metadata_file_path = `/tmp/${box_id}-metadata.txt`;
-        return new Promise((res, rej) => {
-            cp.exec(
-                `isolate --init --cg -b${box_id}`,
-                (error, stdout, stderr) => {
-                    if (error) {
-                        rej(
-                            `Failed to run isolate --init: ${error.message}\nstdout: ${stdout}\nstderr: ${stderr}`
-                        );
-                    }
-                    if (stdout === '') {
-                        rej('Received empty stdout from isolate --init');
-                    }
-                    const box = {
-                        id: box_id,
-                        metadata_file_path,
-                        dir: `${stdout.trim()}/box`,
-                    };
-                    this.#dirty_boxes.push(box);
-                    res(box);
-                }
+        const init_args = ['--init', '--cg', `-b${box_id}`];
+        let result;
+        try {
+            result = await exec_file(ISOLATE_PATH, init_args);
+        } catch (error) {
+            throw new Error(
+                `Failed to run isolate --init: ${error.message}\nstdout: ${error.stdout ?? ''}\nstderr: ${error.stderr ?? ''}`,
             );
-        });
+        }
+        if (result.stdout === '') {
+            throw new Error('Received empty stdout from isolate --init');
+        }
+
+        const box = {
+            id: box_id,
+            metadata_file_path,
+            dir: `${result.stdout.trim()}/box`,
+            storage_attached: false,
+        };
+        this.#dirty_boxes.push(box);
+        if (sandbox_storage.enabled) {
+            await sandbox_storage.attach(this.#slot_id, box.id);
+            box.storage_attached = true;
+        }
+        return box;
+    }
+
+    async #detach_storage(box) {
+        if (!box.storage_attached) return;
+        await sandbox_storage.detach(this.#slot_id, box.id);
+        box.storage_attached = false;
     }
 
     async prime() {
-        if (remaining_job_spaces < 1) {
-            this.logger.info(`Awaiting job slot`);
-            await new Promise(resolve => {
-                job_queue.push(resolve);
-            });
+        if (this.#slot_id !== null) {
+            throw new Error('Job already has a sandbox slot');
         }
+        this.logger.info(`Awaiting job slot`);
+        this.#slot_id = await sandbox_pool.acquire();
         this.logger.info(`Priming job`);
-        remaining_job_spaces--;
         this.logger.debug('Running isolate --init');
         const box = await this.#create_isolate_box();
 
@@ -108,7 +121,7 @@ class Job {
 
             if (rel.startsWith('..'))
                 throw Error(
-                    `File path "${file.name}" tries to escape parent directory: ${rel}`
+                    `File path "${file.name}" tries to escape parent directory: ${rel}`,
                 );
 
             const file_content = Buffer.from(file.content, file.encoding);
@@ -133,7 +146,7 @@ class Job {
         timeout,
         cpu_time,
         memory_limit,
-        event_bus = null
+        event_bus = null,
     ) {
         let stdout = '';
         let stderr = '';
@@ -163,6 +176,9 @@ class Job {
                 `PISTON_LANGUAGE=${this.runtime.language}`,
                 `--dir=${this.runtime.pkgdir}`,
                 `--dir=/etc:noexec`,
+                ...(sandbox_storage.enabled
+                    ? ['--dir=/tmp=tmpfs:fs:rw:noexec']
+                    : []),
                 `--processes=${this.runtime.max_process_count}`,
                 `--open-files=${this.runtime.max_open_files}`,
                 `--fsize=${Math.floor(this.runtime.max_file_size / 1000)}`,
@@ -180,7 +196,7 @@ class Job {
             ],
             {
                 stdio: 'pipe',
-            }
+            },
         );
 
         if (event_bus === null) {
@@ -213,7 +229,7 @@ class Job {
                     // Could already be dead and just needs to be waited on
                     this.logger.debug(
                         `Got error while SIGABRTing process ${proc}:`,
-                        e
+                        e,
                     );
                 }
             } else {
@@ -238,7 +254,7 @@ class Job {
                     // Could already be dead and just needs to be waited on
                     this.logger.debug(
                         `Got error while SIGABRTing process ${proc}:`,
-                        e
+                        e,
                     );
                 }
             } else {
@@ -272,7 +288,7 @@ class Job {
                 const [key, value] = line.split(':');
                 if (key === undefined || value === undefined) {
                     throw new Error(
-                        `Failed to parse metadata file, received: ${line}`
+                        `Failed to parse metadata file, received: ${line}`,
                     );
                 }
                 switch (key) {
@@ -304,7 +320,7 @@ class Job {
             }
         } catch (e) {
             throw new Error(
-                `Error reading metadata file: ${box.metadata_file_path}\nError: ${e.message}\nIsolate run stdout: ${stdout}\nIsolate run stderr: ${stderr}`
+                `Error reading metadata file: ${box.metadata_file_path}\nError: ${e.message}\nIsolate run stdout: ${stdout}\nIsolate run stderr: ${stderr}`,
             );
         }
 
@@ -327,7 +343,7 @@ class Job {
         if (this.state !== job_states.PRIMED) {
             throw new Error(
                 'Job must be in primed state, current state: ' +
-                    this.state.toString()
+                    this.state.toString(),
             );
         }
 
@@ -371,17 +387,22 @@ class Job {
                 this.timeouts.compile,
                 this.cpu_times.compile,
                 this.memory_limits.compile,
-                event_bus
+                event_bus,
             );
             emit_event_bus_result('compile', compile);
             compile_errored = compile.code !== 0;
             if (!compile_errored) {
                 const old_box_dir = box.dir;
+                if (sandbox_storage.enabled) {
+                    await this.#detach_storage(box);
+                }
                 box = await this.#create_isolate_box();
-                await fs.rename(
-                    path.join(old_box_dir, 'submission'),
-                    path.join(box.dir, 'submission')
-                );
+                if (!sandbox_storage.enabled) {
+                    await fs.rename(
+                        path.join(old_box_dir, 'submission'),
+                        path.join(box.dir, 'submission'),
+                    );
+                }
             }
         }
 
@@ -396,7 +417,7 @@ class Job {
                 this.timeouts.run,
                 this.cpu_times.run,
                 this.memory_limits.run,
-                event_bus
+                event_bus,
             );
             emit_event_bus_result('run', run);
         }
@@ -412,33 +433,71 @@ class Job {
     }
 
     async cleanup() {
+        if (this.#cleanup_started) return;
+        this.#cleanup_started = true;
         this.logger.info(`Cleaning up job`);
 
-        remaining_job_spaces++;
-        if (job_queue.length > 0) {
-            job_queue.shift()();
+        if (this.#slot_id === null) {
+            return;
         }
-        await Promise.all(
-            this.#dirty_boxes.map(async box => {
-                cp.exec(
-                    `isolate --cleanup --cg -b${box.id}`,
-                    (error, stdout, stderr) => {
-                        if (error) {
-                            this.logger.error(
-                                `Failed to run isolate --cleanup: ${error.message} on box #${box.id}\nstdout: ${stdout}\nstderr: ${stderr}`
-                            );
-                        }
-                    }
-                );
+
+        try {
+            for (const box of this.#dirty_boxes) {
+                await this.#detach_storage(box);
+            }
+
+            for (const box of this.#dirty_boxes) {
+                try {
+                    await exec_file(ISOLATE_PATH, [
+                        '--cleanup',
+                        '--cg',
+                        `-b${box.id}`,
+                    ]);
+                } catch (error) {
+                    const cleanup_error = new Error(
+                        `Failed to run isolate --cleanup on box #${box.id}: ${error.message}\nstdout: ${error.stdout ?? ''}\nstderr: ${error.stderr ?? ''}`,
+                    );
+                    if (sandbox_storage.enabled) throw cleanup_error;
+                    this.logger.error(cleanup_error.message);
+                }
+            }
+
+            for (const box of this.#dirty_boxes) {
                 try {
                     await fs.rm(box.metadata_file_path);
-                } catch (e) {
+                } catch (error) {
+                    if (error.code === 'ENOENT') continue;
+                    if (sandbox_storage.enabled) throw error;
                     this.logger.error(
-                        `Failed to remove the metadata directory of box #${box.id}. Error: ${e.message}`
+                        `Failed to remove metadata for box #${box.id}: ${error.message}`,
                     );
                 }
-            })
-        );
+            }
+
+            if (sandbox_storage.enabled) {
+                await sandbox_storage.reset(this.#slot_id);
+            }
+
+            sandbox_pool.release(this.#slot_id);
+            this.#slot_id = null;
+        } catch (error) {
+            if (sandbox_storage.enabled) {
+                this.logger.error(
+                    `Sandbox slot ${this.#slot_id} is quarantined after cleanup failed: ${error.message}`,
+                );
+                try {
+                    await sandbox_storage.quarantine(
+                        this.#slot_id,
+                        error.message,
+                    );
+                } catch (_) {
+                    // The supervisor may already be stopping after a failed storage operation.
+                }
+            } else {
+                this.logger.error(`Job cleanup failed: ${error.message}`);
+            }
+            throw error;
+        }
     }
 }
 

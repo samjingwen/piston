@@ -35,7 +35,7 @@ async function assertRuntimeAvailable() {
     assert.equal(packages.response.status, 200);
     const pythonPackage = packages.body.find(
         entry =>
-            entry.language === 'python' && entry.language_version === '3.12.0'
+            entry.language === 'python' && entry.language_version === '3.12.0',
     );
     assert.deepEqual(pythonPackage, {
         language: 'python',
@@ -61,10 +61,10 @@ async function assertWebSocket() {
             () =>
                 reject(
                     new Error(
-                        `WebSocket timed out: ${JSON.stringify(messages)}`
-                    )
+                        `WebSocket timed out: ${JSON.stringify(messages)}`,
+                    ),
                 ),
-            10000
+            10000,
         );
 
         socket.addEventListener('open', () => {
@@ -79,7 +79,7 @@ async function assertWebSocket() {
                             content: "print('websocket-ok')",
                         },
                     ],
-                })
+                }),
             );
         });
 
@@ -102,30 +102,30 @@ async function assertWebSocket() {
                         message =>
                             message.type === 'runtime' &&
                             message.language === 'python' &&
-                            message.version === '3.12.0'
-                    )
+                            message.version === '3.12.0',
+                    ),
                 );
                 assert(
                     messages.some(
                         message =>
-                            message.type === 'stage' && message.stage === 'run'
-                    )
+                            message.type === 'stage' && message.stage === 'run',
+                    ),
                 );
                 assert(
                     messages.some(
                         message =>
                             message.type === 'data' &&
                             message.stream === 'stdout' &&
-                            message.data === 'websocket-ok\n'
-                    )
+                            message.data === 'websocket-ok\n',
+                    ),
                 );
                 assert(
                     messages.some(
                         message =>
                             message.type === 'exit' &&
                             message.stage === 'run' &&
-                            message.code === 0
-                    )
+                            message.code === 0,
+                    ),
                 );
                 resolve();
             } catch (error) {
@@ -133,6 +133,119 @@ async function assertWebSocket() {
             }
         });
     });
+}
+
+function assertStorageLimit(result, label, maximum) {
+    assert.equal(result.run.code, 0, JSON.stringify(result.run));
+    const match = result.run.stdout.match(
+        new RegExp(`${label}\\s+28\\s+(\\d+)`),
+    );
+    assert(match, JSON.stringify(result.run));
+    const consumed = Number(match[1]);
+    assert(consumed > 0, JSON.stringify(result.run));
+    assert(consumed < maximum, JSON.stringify(result.run));
+    return consumed;
+}
+
+async function exhaustStorage(prefix) {
+    return execute(`
+from pathlib import Path
+
+chunk = b'x' * (512 * 1024)
+written = 0
+try:
+    for index in range(512):
+        Path('${prefix}-' + str(index) + '.bin').write_bytes(chunk)
+        written += len(chunk)
+except OSError as error:
+    print('storage-limit', error.errno, written)
+else:
+    print('storage-limit-missing', written)
+`);
+}
+
+async function assertBoundedSandboxStorage() {
+    const temporaryStorage = await execute(`
+from pathlib import Path
+
+mounts = [line.split() for line in Path('/proc/mounts').read_text().splitlines()]
+print(any(
+    fields[1] == '/tmp'
+    and fields[2] == 'tmpfs'
+    and 'noexec' in fields[3].split(',')
+    for fields in mounts
+))
+Path('/tmp/job-marker').write_text('temporary')
+`);
+    assert.equal(
+        temporaryStorage.run.code,
+        0,
+        JSON.stringify(temporaryStorage.run),
+    );
+    assert.equal(temporaryStorage.run.stdout, 'True\n');
+
+    const cleanTemporaryStorage = await execute(`
+from pathlib import Path
+
+print(Path('/tmp/job-marker').exists())
+`);
+    assert.equal(
+        cleanTemporaryStorage.run.code,
+        0,
+        JSON.stringify(cleanTemporaryStorage.run),
+    );
+    assert.equal(cleanTemporaryStorage.run.stdout, 'False\n');
+
+    const maximumBytes = 32 * 1024 * 1024;
+    const [first, second, third] = await Promise.all([
+        exhaustStorage('first'),
+        exhaustStorage('second'),
+        exhaustStorage('third'),
+    ]);
+    const firstBytes = assertStorageLimit(first, 'storage-limit', maximumBytes);
+    const secondBytes = assertStorageLimit(
+        second,
+        'storage-limit',
+        maximumBytes,
+    );
+    const thirdBytes = assertStorageLimit(third, 'storage-limit', maximumBytes);
+    const storageResults = [firstBytes, secondBytes, thirdBytes];
+    assert(
+        Math.min(...storageResults) >= Math.max(...storageResults) * 0.75,
+        JSON.stringify({
+            first: first.run,
+            second: second.run,
+            third: third.run,
+        }),
+    );
+
+    const inodes = await execute(`
+from pathlib import Path
+
+created = 0
+try:
+    for index in range(4096):
+        Path('inode-' + str(index)).touch()
+        created += 1
+except OSError as error:
+    print('inode-limit', error.errno, created)
+else:
+    print('inode-limit-missing', created)
+`);
+    assertStorageLimit(inodes, 'inode-limit', 256);
+
+    const clean = await execute(`
+from pathlib import Path
+
+print(
+    Path('first-0.bin').exists(),
+    Path('inode-0').exists(),
+)
+Path('clean.txt').write_text('ok')
+print(Path('clean.txt').read_text())
+`);
+    assert.equal(clean.run.code, 0, JSON.stringify(clean.run));
+    assert.equal(clean.run.stdout, 'False False\nok\n');
 }
 
 async function fullAcceptance() {
@@ -149,7 +262,7 @@ async function fullAcceptance() {
     assert.equal(unsupported.response.status, 415);
     assert.equal(
         unsupported.body.message,
-        'requests must be of type application/json'
+        'requests must be of type application/json',
     );
 
     const unknown = await request('/api/v2/execute', {
@@ -165,7 +278,7 @@ async function fullAcceptance() {
     assert.equal(unknown.body.message, 'missing-* runtime is unknown');
 
     const basic = await execute(
-        "import platform\nprint('hello-arm64')\nprint(platform.machine())"
+        "import platform\nprint('hello-arm64')\nprint(platform.machine())",
     );
     assert.equal(basic.run.code, 0);
     assert.equal(basic.run.stdout, 'hello-arm64\naarch64\n');
@@ -227,7 +340,7 @@ print(
 
     const memory = await execute(
         'value = bytearray(256 * 1024 * 1024)\nprint(len(value))',
-        { run_memory_limit: 32 * 1024 * 1024 }
+        { run_memory_limit: 32 * 1024 * 1024 },
     );
     assert.notEqual(memory.run.code, 0);
     assert(memory.run.memory <= 48 * 1024 * 1024, JSON.stringify(memory.run));
@@ -293,6 +406,8 @@ path.write_text('probe')
         assert.equal(fileIsolation.run.stdout, 'existed False\n');
     }
 
+    await assertBoundedSandboxStorage();
+
     await assertWebSocket();
 }
 
@@ -308,7 +423,7 @@ async function deletionAcceptance() {
     assert.equal(packages.response.status, 200);
     const pythonPackage = packages.body.find(
         entry =>
-            entry.language === 'python' && entry.language_version === '3.12.0'
+            entry.language === 'python' && entry.language_version === '3.12.0',
     );
     assert(pythonPackage, 'Python 3.12.0 is missing from the package index');
     assert.equal(pythonPackage.installed, false);
@@ -316,6 +431,11 @@ async function deletionAcceptance() {
     const runtimes = await request('/api/v2/runtimes');
     assert.equal(runtimes.response.status, 200);
     assert.deepEqual(runtimes.body, []);
+}
+
+async function storageAcceptance() {
+    await assertRuntimeAvailable();
+    await assertBoundedSandboxStorage();
 }
 
 switch (mode) {
@@ -327,6 +447,9 @@ switch (mode) {
         break;
     case 'deleted':
         await deletionAcceptance();
+        break;
+    case 'storage':
+        await storageAcceptance();
         break;
     default:
         throw new Error(`Unknown acceptance mode: ${mode}`);

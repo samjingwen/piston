@@ -2,6 +2,16 @@ const fss = require('fs');
 const Logger = require('logplease');
 const logger = Logger.create('config');
 
+const parse_safe_integer = value => Number(value);
+const validate_nonnegative_safe_integer = (value, raw) =>
+    (Number.isSafeInteger(value) && value >= 0) ||
+    `${raw} is not a non-negative safe integer`;
+const validate_nonnegative_mebibytes = (value, raw) =>
+    validate_nonnegative_safe_integer(value, raw) === true &&
+    value <= Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024))
+        ? true
+        : `${raw} is not a safely representable MiB size`;
+
 const options = {
     log_level: {
         desc: 'Level of data to log',
@@ -75,6 +85,24 @@ const options = {
         default: 10000000, //10MB
         parser: value => Number.parseInt(value, 10),
         validators: [(x, raw) => !Number.isNaN(x) || `${raw} is not a number`],
+    },
+    sandbox_slot_size_mb: {
+        desc: 'Size in MiB of each bounded sandbox slot filesystem; 0 disables bounded storage',
+        default: 0,
+        parser: parse_safe_integer,
+        validators: [validate_nonnegative_mebibytes],
+    },
+    sandbox_slot_inodes: {
+        desc: 'Total inode count for each bounded sandbox slot filesystem; 0 disables bounded storage',
+        default: 0,
+        parser: parse_safe_integer,
+        validators: [validate_nonnegative_safe_integer],
+    },
+    sandbox_scratch_size_mb: {
+        desc: 'Size in MiB of the service-wide scratch filesystem containing sandbox slots; 0 disables bounded storage',
+        default: 0,
+        parser: parse_safe_integer,
+        validators: [validate_nonnegative_mebibytes],
     },
     compile_timeout: {
         desc: 'Max time allowed for compile stage in milliseconds',
@@ -226,17 +254,47 @@ for (const option_name in options) {
         env_val === undefined ? [value, value] : [parsed_val, env_val];
     const validation_response = apply_validators(
         option.validators,
-        validator_parameters
+        validator_parameters,
     );
     if (validation_response !== true) {
         logger.error(
             `Config option ${option_name} failed validation:`,
-            validation_response
+            validation_response,
         );
         process.exit(1);
     }
     config[option_name] = value;
 }
+
+const sandbox_storage_values = [
+    config.sandbox_slot_size_mb,
+    config.sandbox_slot_inodes,
+    config.sandbox_scratch_size_mb,
+];
+const sandbox_storage_enabled = sandbox_storage_values.some(value => value > 0);
+if (
+    sandbox_storage_enabled &&
+    !sandbox_storage_values.every(value => value > 0)
+) {
+    logger.error(
+        'Config options sandbox_slot_size_mb, sandbox_slot_inodes, and sandbox_scratch_size_mb must all be 0 or all be positive',
+    );
+    process.exit(1);
+}
+if (
+    sandbox_storage_enabled &&
+    (!Number.isSafeInteger(
+        config.sandbox_slot_size_mb * (config.max_concurrent_jobs + 1),
+    ) ||
+        config.sandbox_scratch_size_mb <
+            config.sandbox_slot_size_mb * (config.max_concurrent_jobs + 1))
+) {
+    logger.error(
+        'Config option sandbox_scratch_size_mb must fit every sandbox slot plus one slot of recovery headroom',
+    );
+    process.exit(1);
+}
+config.sandbox_storage_enabled = sandbox_storage_enabled;
 
 logger.info('Configuration successfully loaded');
 

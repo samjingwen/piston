@@ -110,7 +110,8 @@ default: 64
 
 Maximum number of open files at a given time by a job.
 
-Resists against writing many smaller files to exhaust inodes.
+Resists against exhausting file descriptors.
+This does not limit the aggregate number of files a job can create and close.
 
 ## Max File Size
 
@@ -122,6 +123,33 @@ default: 10000000 #10MB
 Maximum size for a singular file written to disk.
 
 Resists against large file writes to exhaust disk space.
+This does not limit aggregate sandbox storage across multiple files.
+
+## Bounded Sandbox Storage
+
+```yaml
+key:
+    - PISTON_SANDBOX_SLOT_SIZE_MB
+    - PISTON_SANDBOX_SLOT_INODES
+    - PISTON_SANDBOX_SCRATCH_SIZE_MB
+default:
+    - 0
+    - 0
+    - 0
+```
+
+These settings create one bounded ext4 filesystem for every configured concurrent job and place all slot images inside a service-wide bounded scratch filesystem.
+All three values must be 0 to disable bounded storage or all three must be positive safe integers to enable it.
+The scratch size must fit every slot plus one additional slot of recovery headroom.
+
+The pool size comes from `PISTON_MAX_CONCURRENT_JOBS`.
+Piston leases one slot for the complete compile and run lifecycle, reformats the slot before releasing it, and does not release a slot whose reset failed.
+Unlike `PISTON_MAX_FILE_SIZE` and `PISTON_MAX_OPEN_FILES`, each slot filesystem limits aggregate writable bytes and filesystem objects across the complete job.
+When bounded storage is enabled, `/box` uses the leased ext4 filesystem and `/tmp` uses a fresh non-executable `tmpfs` accounted by the job's memory cgroup and bounded by its memory limit when configured.
+If a slot cannot be detached, cleaned, or reformatted safely, Piston quarantines it and exits nonzero so its service manager can recreate the complete pool.
+
+Bounded storage requires privileged operation, `e2fsprogs`, loop-device support, and mount permission.
+The default values preserve the host filesystem behavior used by existing Piston installations.
 
 ## Compile/Run timeouts
 

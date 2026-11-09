@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 CGROUP_FS="/sys/fs/cgroup"
 if [ ! -e "$CGROUP_FS" ]; then
   echo "Cannot find $CGROUP_FS. Please make sure your system is using cgroup v2"
@@ -26,4 +28,5 @@ echo 1 > init/cgroup.procs && \
 echo '+cpuset +memory' > cgroup.subtree_control && \
 echo "Initialized cgroup" && \
 chown -R piston:piston /piston && \
-exec su -- piston -c 'ulimit -n 65536 && node /piston_api/src'
+ulimit -n 65536 && \
+exec node /piston_api/src/sandbox-supervisor.js
