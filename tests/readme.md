@@ -21,4 +21,7 @@ Set `PISTON_PACKAGE_REPO_DIR` to reuse an existing package repository directory 
 
 Run `tests/reproducible-package.sh` on a native ARM64 Docker host to build the Python package twice from tracked clean inputs and require byte-identical package archives and repository indexes.
 Set `PISTON_REPRODUCIBILITY_OUTPUT_DIR` to retain one verified repository for reuse through `PISTON_PACKAGE_REPO_DIR` during full acceptance.
+
+Run `tests/dockerfile-frontends.sh` to require every maintained Dockerfile to use the reviewed immutable frontend identity.
+The selected `docker/dockerfile:1.28.0` index digest is `sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b`, and its verified Linux ARM64 manifest is `sha256:da84f4c7220ca8b66b7a0be6066d5e559878c2248beb92bdc8530dd9356bd711`.
 Set `KEEP_ACCEPTANCE_RESOURCES=1` to keep the uniquely named test containers, network, and temporary directory for inspection.
