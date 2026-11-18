@@ -3,6 +3,8 @@
 set -euo pipefail
 
 CGROUP_FS="/sys/fs/cgroup"
+source /piston_api/src/cgroup.sh
+
 if [ ! -e "$CGROUP_FS" ]; then
   echo "Cannot find $CGROUP_FS. Please make sure your system is using cgroup v2"
   exit 1
@@ -18,7 +20,13 @@ if [ ! -e "$CGROUP_FS/cgroup.subtree_control" ]; then
   exit 1
 fi
 
-cd /sys/fs/cgroup && \
+CGROUP_BASE="$(piston_cgroup_base /proc/self/cgroup "$CGROUP_FS")"
+if [ ! -d "$CGROUP_BASE" ]; then
+  echo "Cannot find the process cgroup $CGROUP_BASE"
+  exit 1
+fi
+
+cd "$CGROUP_BASE" && \
 mkdir isolate/ && \
 echo 1 > isolate/cgroup.procs && \
 echo '+cpuset +cpu +io +memory +pids' > cgroup.subtree_control && \
