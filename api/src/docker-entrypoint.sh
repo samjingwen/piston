@@ -26,6 +26,10 @@ if [ ! -d "$CGROUP_BASE" ]; then
   exit 1
 fi
 
+install -d -m 0700 /run/isolate
+printf '%s\n' "${CGROUP_BASE%/}/isolate" > /run/isolate/cgroup-root
+chmod 0600 /run/isolate/cgroup-root
+
 cd "$CGROUP_BASE" && \
 mkdir isolate/ && \
 echo 1 > isolate/cgroup.procs && \

@@ -76,6 +76,10 @@ COPY --from=isolate /usr/local/bin/isolate /usr/local/bin/isolate
 COPY --from=isolate /usr/local/etc/isolate /usr/local/etc/isolate
 
 RUN test -u /usr/local/bin/isolate && \
+    sed -i \
+        's#^cg_root = .*#cg_root = auto:/run/isolate/cgroup-root#' \
+        /usr/local/etc/isolate && \
+    grep -Fxq 'cg_root = auto:/run/isolate/cgroup-root' /usr/local/etc/isolate && \
     sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && \
     locale-gen
 
