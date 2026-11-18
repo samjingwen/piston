@@ -58,6 +58,18 @@ wait_for_api() {
 }
 
 assert_storage_layout() {
+    local expected_cgroup_root
+
+    expected_cgroup_root="$(docker exec "$API_CONTAINER" sh -ceu '
+        relative="$(awk -F: '\''$1 == "0" && $2 == "" { print $3 }'\'' /proc/self/cgroup)"
+        if [ "$relative" = "/" ]; then
+            printf "%s\n" /sys/fs/cgroup/isolate
+        else
+            printf "%s%s\n" /sys/fs/cgroup "${relative%/}/isolate"
+        fi
+    ')"
+    [[ "$(docker exec "$API_CONTAINER" isolate --print-cg-root)" == "$expected_cgroup_root" ]]
+
     docker exec \
         --env "EXPECTED_SLOTS=${MAX_CONCURRENT_JOBS}" \
         --env "EXPECTED_SLOT_BYTES=$((SANDBOX_SLOT_SIZE_MB * 1024 * 1024))" \
