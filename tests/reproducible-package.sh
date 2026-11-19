@@ -22,7 +22,7 @@ copy_tracked_sources() {
 
     mkdir -p "$destination"
     git -C "$ROOT" ls-files -z packages repo |
-        tar --create --null --files-from=- --file=- --directory="$ROOT" |
+        tar --create --directory="$ROOT" --null --files-from=- --file=- |
         tar --extract --file=- --directory="$destination"
 }
 
