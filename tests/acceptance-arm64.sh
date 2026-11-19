@@ -58,17 +58,24 @@ wait_for_api() {
 }
 
 assert_storage_layout() {
-    local expected_cgroup_root
+    local actual_cgroup_root expected_cgroup_root
 
     expected_cgroup_root="$(docker exec "$API_CONTAINER" sh -ceu '
         relative="$(awk -F: '\''$1 == "0" && $2 == "" { print $3 }'\'' /proc/self/cgroup)"
         if [ "$relative" = "/" ]; then
             printf "%s\n" /sys/fs/cgroup/isolate
+        elif [ "${relative%/isolate/init}" != "$relative" ]; then
+            printf "%s%s\n" /sys/fs/cgroup "${relative%/isolate/init}/isolate"
         else
-            printf "%s%s\n" /sys/fs/cgroup "${relative%/}/isolate"
+            printf "Unexpected post-start cgroup path: %s\n" "$relative" >&2
+            exit 1
         fi
     ')"
-    [[ "$(docker exec "$API_CONTAINER" isolate --print-cg-root)" == "$expected_cgroup_root" ]]
+    actual_cgroup_root="$(docker exec "$API_CONTAINER" isolate --print-cg-root)"
+    if [[ "$actual_cgroup_root" != "$expected_cgroup_root" ]]; then
+        echo "Isolate cgroup root ${actual_cgroup_root} differs from expected ${expected_cgroup_root}." >&2
+        return 1
+    fi
 
     docker exec \
         --env "EXPECTED_SLOTS=${MAX_CONCURRENT_JOBS}" \
