@@ -18,12 +18,13 @@ cleanup() {
             --network none \
             --read-only \
             --cap-drop ALL \
+            --cap-add DAC_OVERRIDE \
             --security-opt no-new-privileges \
             --mount "type=bind,source=${TEMP_DIR},target=/cleanup" \
             --entrypoint rm \
             "$REPO_IMAGE" \
             --recursive --force /cleanup/first /cleanup/second \
-            >/dev/null 2>&1 || true
+            || printf 'The package-builder image could not clean temporary build roots.\n' >&2
     fi
     rm -rf "$TEMP_DIR"
     exit "$exit_code"
