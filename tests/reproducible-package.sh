@@ -12,6 +12,19 @@ readonly PACKAGE_FILE='python-3.12.0.pkg.tar.gz'
 cleanup() {
     local exit_code=$?
     trap - EXIT INT TERM
+    if command -v docker >/dev/null 2>&1 \
+        && docker image inspect "$REPO_IMAGE" >/dev/null 2>&1; then
+        docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --mount "type=bind,source=${TEMP_DIR},target=/cleanup" \
+            --entrypoint rm \
+            "$REPO_IMAGE" \
+            --recursive --force /cleanup/first /cleanup/second \
+            >/dev/null 2>&1 || true
+    fi
     rm -rf "$TEMP_DIR"
     exit "$exit_code"
 }
