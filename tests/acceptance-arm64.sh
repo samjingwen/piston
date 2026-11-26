@@ -17,6 +17,7 @@ readonly MAX_CONCURRENT_JOBS="${PISTON_MAX_CONCURRENT_JOBS:-3}"
 readonly SANDBOX_SLOT_SIZE_MB="${PISTON_SANDBOX_SLOT_SIZE_MB:-32}"
 readonly SANDBOX_SLOT_INODES="${PISTON_SANDBOX_SLOT_INODES:-256}"
 readonly SANDBOX_SCRATCH_SIZE_MB="${PISTON_SANDBOX_SCRATCH_SIZE_MB:-256}"
+readonly RUNTIME_PROFILE="${PISTON_RUNTIME_PROFILE:-full}"
 
 NETWORK_CREATED=0
 BASE_URL=''
@@ -375,6 +376,7 @@ if [[ "${SKIP_IMAGE_BUILD:-0}" != '1' ]]; then
     docker build \
         --platform linux/arm64 \
         --build-arg "VCS_REF=$(git -C "$ROOT" rev-parse HEAD)-local" \
+        --build-arg "PISTON_RUNTIME_PROFILE=${RUNTIME_PROFILE}" \
         --tag "$API_IMAGE" \
         "$ROOT/api"
     docker build \
@@ -386,6 +388,42 @@ fi
 if [[ "$(docker image inspect "$API_IMAGE" --format '{{.Architecture}}')" != 'arm64' ]]; then
     echo "${API_IMAGE} is not an ARM64 image." >&2
     exit 1
+fi
+actual_runtime_profile="$(
+    docker image inspect \
+        "$API_IMAGE" \
+        --format '{{index .Config.Labels "org.piston.runtime.profile"}}'
+)"
+if [[ "$actual_runtime_profile" != "$RUNTIME_PROFILE" ]]; then
+    echo "${API_IMAGE} does not use the ${RUNTIME_PROFILE} runtime profile." >&2
+    exit 1
+fi
+docker run --rm \
+    --network none \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --entrypoint sh \
+    "$API_IMAGE" -ceu '
+        for command in node isolate mkfs.ext4 losetup findmnt mount umount tune2fs setpriv tar; do
+            command -v "$command" >/dev/null
+        done
+        test -r /etc/ssl/certs/ca-certificates.crt
+        ldconfig -p | grep -F "libffi.so.8" >/dev/null
+        ldconfig -p | grep -F "libreadline.so.8" >/dev/null
+    '
+if [[ "$RUNTIME_PROFILE" == 'freequantcamp-python' ]]; then
+    docker run --rm \
+        --network none \
+        --read-only \
+        --cap-drop ALL \
+        --security-opt no-new-privileges \
+        --entrypoint sh \
+        "$API_IMAGE" -ceu '
+            for command in cc gcc g++ make ssh; do
+                ! command -v "$command" >/dev/null
+            done
+        '
 fi
 
 mkdir -p "$DATA_DIR"
@@ -417,7 +455,7 @@ docker run --detach \
     --entrypoint python3 \
     --workdir /repo \
     --mount "type=bind,source=${PACKAGE_REPO_DIR},target=/repo,readonly" \
-    "$API_IMAGE" -m http.server 8000 >/dev/null
+    "$REPO_IMAGE" -m http.server 8000 >/dev/null
 
 start_api
 
