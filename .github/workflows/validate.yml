@@ -1,0 +1,64 @@
+name: Validate Piston
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-piston-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Piston
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate source boundaries
+        run: |
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          bash -n \
+            tests/acceptance-arm64.sh \
+            tests/dockerfile-frontends.sh \
+            tests/reproducible-package.sh
+          tests/dockerfile-frontends.sh
+
+      - name: Build reviewed images
+        run: |
+          docker build \
+            --platform linux/arm64 \
+            --build-arg "VCS_REF=$(git rev-parse HEAD)" \
+            --tag piston-api:validation \
+            --file api/Dockerfile \
+            api
+          docker build \
+            --platform linux/arm64 \
+            --tag piston-repo:validation \
+            repo
+
+      - name: Verify reproducible package
+        run: |
+          mkdir -p "$RUNNER_TEMP/piston-runtime"
+          PISTON_REPO_IMAGE=piston-repo:validation \
+          PISTON_REPRODUCIBILITY_OUTPUT_DIR="$RUNNER_TEMP/piston-runtime" \
+          SKIP_IMAGE_BUILD=1 \
+            tests/reproducible-package.sh
+
+      - name: Run native ARM64 acceptance
+        run: |
+          PISTON_API_IMAGE=piston-api:validation \
+          PISTON_REPO_IMAGE=piston-repo:validation \
+          PISTON_PACKAGE_REPO_DIR="$RUNNER_TEMP/piston-runtime" \
+          SKIP_IMAGE_BUILD=1 \
+            tests/acceptance-arm64.sh
