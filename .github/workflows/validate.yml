@@ -34,10 +34,23 @@ jobs:
             tests/reproducible-package.sh
           tests/dockerfile-frontends.sh
 
+      - name: Set up Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.76.2
+          cache: true
+
       - name: Build reviewed images
         run: |
           docker build \
             --platform linux/arm64 \
+            --build-arg "VCS_REF=$(git rev-parse HEAD)" \
+            --tag piston-api:validation-full \
+            --file api/Dockerfile \
+            api
+          docker build \
+            --platform linux/arm64 \
+            --build-arg PISTON_RUNTIME_PROFILE=freequantcamp-python \
             --build-arg "VCS_REF=$(git rev-parse HEAD)" \
             --tag piston-api:validation \
             --file api/Dockerfile \
@@ -46,6 +59,41 @@ jobs:
             --platform linux/arm64 \
             --tag piston-repo:validation \
             repo
+
+      - name: Reject unknown runtime profiles
+        run: |
+          if docker build \
+            --platform linux/arm64 \
+            --build-arg PISTON_RUNTIME_PROFILE=unexpected \
+            --tag piston-api:invalid-profile \
+            --file api/Dockerfile \
+            api; then
+            echo "An unknown runtime profile unexpectedly built." >&2
+            exit 1
+          fi
+
+      - name: Scan runtime images
+        run: |
+          trivy image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --quiet \
+            piston-api:validation-full
+          trivy image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --quiet \
+            piston-api:validation
+          trivy image \
+            --scanners vuln \
+            --severity CRITICAL \
+            --exit-code 1 \
+            --quiet \
+            piston-api:validation
 
       - name: Verify reproducible package
         run: |
@@ -57,6 +105,7 @@ jobs:
 
       - name: Run native ARM64 acceptance
         run: |
+          PISTON_RUNTIME_PROFILE=freequantcamp-python \
           PISTON_API_IMAGE=piston-api:validation \
           PISTON_REPO_IMAGE=piston-repo:validation \
           PISTON_PACKAGE_REPO_DIR="$RUNNER_TEMP/piston-runtime" \
